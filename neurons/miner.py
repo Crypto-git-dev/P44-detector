@@ -18,10 +18,7 @@ from poker44.utils.model_manifest import (
 )
 from poker44.validator.synapse import DetectionSynapse
 
-MODEL_REPO_PATH = "detection_model",
-
-if MODEL_REPO_PATH and MODEL_REPO_PATH not in sys.path:
-    sys.path.append(MODEL_REPO_PATH)
+MODEL_REPO_PATH = "detection_model"
 
 from detection_model.model.inference import Poker44BotDetector
 
@@ -65,7 +62,7 @@ class Miner(BaseMinerNeuron):
         repo_root = Path(__file__).resolve().parents[1]
         model_repo_root = Path(MODEL_REPO_PATH).expanduser()
 
-        self.model_path = "detection-model/artifacts/p44_action_vector_gru_window_v4.pt",
+        self.model_path = "detection_model/artifacts/p44_action_vector_gru_window_v4.pt"
 
         self.xgb_path = os.getenv("P44_XGB_PATH", "")
 
@@ -157,7 +154,7 @@ class Miner(BaseMinerNeuron):
                     "P44_MANIFEST_REPO_COMMIT",
                     os.getenv(
                         "P44_MODEL_REPO_COMMIT",
-                        "e44aa206105d0f48536793bc96916e5101a3545f",
+                        "023c9ccde49cface05b44d4ae59d1621a4c8e6ac",
                     ),
                 ),
 
