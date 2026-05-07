@@ -18,24 +18,12 @@ from poker44.utils.model_manifest import (
 )
 from poker44.validator.synapse import DetectionSynapse
 
-
-MODEL_REPO_PATH = os.getenv(
-    "P44_MODEL_REPO",
-    "/root/Poker-bot-detection-model",
-)
+MODEL_REPO_PATH = "detection_model",
 
 if MODEL_REPO_PATH and MODEL_REPO_PATH not in sys.path:
     sys.path.append(MODEL_REPO_PATH)
 
-
-try:
-    from model.inference import Poker44BotDetector
-except Exception as exc:
-    Poker44BotDetector = None
-    MODEL_IMPORT_ERROR = exc
-else:
-    MODEL_IMPORT_ERROR = None
-
+from detection_model.model.inference import Poker44BotDetector
 
 def _sha256_file(path: str | Path) -> str:
     """Return SHA256 hash for a file, or empty string if unavailable."""
@@ -77,10 +65,7 @@ class Miner(BaseMinerNeuron):
         repo_root = Path(__file__).resolve().parents[1]
         model_repo_root = Path(MODEL_REPO_PATH).expanduser()
 
-        self.model_path = os.getenv(
-            "P44_MODEL_PATH",
-            "/root/Poker-bot-detection-model/artifacts/p44_action_vector_gru_window_v4.pt",
-        )
+        self.model_path = "detection-model/artifacts/p44_action_vector_gru_window_v4.pt",
 
         self.xgb_path = os.getenv("P44_XGB_PATH", "")
 
@@ -165,14 +150,14 @@ class Miner(BaseMinerNeuron):
 
                 "repo_url": os.getenv(
                     "P44_MANIFEST_REPO_URL",
-                    "https://github.com/Crypto-git-dev/Poker-bot-detection-model",
+                    "https://github.com/Crypto-git-dev/P44-detector",
                 ),
 
                 "repo_commit": os.getenv(
                     "P44_MANIFEST_REPO_COMMIT",
                     os.getenv(
                         "P44_MODEL_REPO_COMMIT",
-                        "673db0c9b55c66c2ae71e9cf37c23d15b0d0396f",
+                        "e44aa206105d0f48536793bc96916e5101a3545f",
                     ),
                 ),
 
@@ -180,7 +165,7 @@ class Miner(BaseMinerNeuron):
                 # Leave blank for local-only artifacts.
                 "artifact_url": os.getenv(
                     "P44_MANIFEST_ARTIFACT_URL",
-                    "https://github.com/Crypto-git-dev/Poker-bot-detection-model/tree/action_vectorizer_model/artifacts/p44_action_vector_gru_window_v4.pt",
+                    "",
                 ),
 
                 "artifact_sha256": artifact_sha256,
@@ -482,8 +467,8 @@ class Miner(BaseMinerNeuron):
                 f"window_hands={self.window_hands} "
                 f"stride={self.window_stride} "
                 f"agg={self.window_agg} | "
-                f"preview_scores={clean_scores[:5]} | "
-                f"preview_predictions={synapse.predictions[:5]}"
+                f"preview_scores={clean_scores} | "
+                f"preview_predictions={synapse.predictions}"
             )
 
             return synapse
