@@ -47,6 +47,7 @@ def parse_args() -> argparse.Namespace:
         default="mean",
     )
     parser.add_argument("--keep-short-window-chunks", action="store_true")
+    parser.add_argument("--out-json", default=None)
 
     return parser.parse_args()
 
@@ -197,6 +198,27 @@ def predict_with_windows(
 
     return final_scores, counts
 
+def save_mismatches_json(path: str, samples: List[ChunkSample], rows: List[Dict[str, Any]]) -> None:
+    mismatched_chunks = []
+
+    for sample, row in zip(samples, rows):
+        if row["is_mismatch"]:
+            mismatched_chunks.append({
+                "hands": sample.chunk,
+                "is_bot": not sample.label,
+                "score": row["score"],
+                "prediction": row["prediction"],
+            })
+
+    output = {
+        "labeled_chunks": mismatched_chunks
+    }
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2)
 
 # =========================================================
 # Output
@@ -281,6 +303,10 @@ def main() -> None:
         window_counts = None
 
     rows = build_rows(samples, scores, threshold, window_counts)
+
+    if args.out_json:
+        save_mismatches_json(args.out_json, samples, rows)
+        print(f"Saved mismatches JSON: {args.out_json}")
 
     # sort mismatches first, then by score
     rows = sorted(
