@@ -62,7 +62,7 @@ class Miner(BaseMinerNeuron):
         repo_root = Path(__file__).resolve().parents[1]
         model_repo_root = Path(MODEL_REPO_PATH).expanduser()
 
-        self.model_path = "detection_model/artifacts/p44_action_vector_gru_window_v4.pt"
+        self.model_path = "detection_model/artifacts/p44_action_vector_gru_window_v4_05_07.pt"
 
         self.xgb_path = os.getenv("P44_XGB_PATH", "")
 
