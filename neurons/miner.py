@@ -62,7 +62,7 @@ class Miner(BaseMinerNeuron):
         repo_root = Path(__file__).resolve().parents[1]
         model_repo_root = Path(MODEL_REPO_PATH).expanduser()
 
-        self.model_path = "detection_model/artifacts/p44_action_vector_gru_window_v4.pt"
+        self.model_path = "detection_model/artifacts/p44_action_vector_gru_window_v5_7.pt"
 
         self.xgb_path = os.getenv("P44_XGB_PATH", "")
 
@@ -324,6 +324,10 @@ class Miner(BaseMinerNeuron):
         for start in range(0, n - self.window_hands + 1, self.window_stride):
             end = start + self.window_hands
             windows.append(chunk[start:end])
+        
+        last_start = n - self.window_hands
+        if len(windows) == 0 or (start != last_start):
+            windows.append(chunk[last_start:last_start + self.window_hands])
 
         return windows or [chunk]
 

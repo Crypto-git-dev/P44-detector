@@ -69,7 +69,7 @@ def load_chunk_dump(path: str) -> List[ChunkSample]:
         samples.append(
             ChunkSample(
                 chunk=chunk["hands"] if "hands" in chunk else chunk,
-                label=chunk.get("is_bot", 0),  # true label
+                label=chunk.get("is_bot", 0) if isinstance(chunk, dict) else 0,  # true label
             )
         )
 
@@ -133,6 +133,10 @@ def make_windows_for_chunk(
     windows = []
     for start in range(0, n - window_hands + 1, window_stride):
         windows.append(chunk[start:start + window_hands])
+
+    last_start = n - window_hands
+    if len(windows) == 0 or (start != last_start):
+        windows.append(chunk[last_start:last_start + window_hands])
 
     return windows
 
@@ -198,20 +202,41 @@ def predict_with_windows(
 
     return final_scores, counts
 
-def save_mismatches_json(path: str, samples: List[ChunkSample], rows: List[Dict[str, Any]]) -> None:
-    mismatched_chunks = []
+def save_mismatches_json(
+    path: str,
+    samples: List[ChunkSample],
+    rows: List[Dict[str, Any]],
+    min_diff: float = 0.2,
+) -> None:
+    selected_chunks = []
 
     for sample, row in zip(samples, rows):
-        if row["is_mismatch"]:
-            mismatched_chunks.append({
-                "hands": sample.chunk,
-                "is_bot": not sample.label,
-                "score": row["score"],
-                "prediction": row["prediction"],
-            })
+        true_label = int(sample.label)
+        score = float(row["score"])
+
+        diff = abs(score - true_label)
+
+        if diff < min_diff:
+            continue
+
+        item = {
+            "hands": sample.chunk,
+            "is_bot": true_label,
+            "score": score,
+            "prediction": row["prediction"],
+            "diff": diff,
+        }
+
+        selected_chunks.append(item)
+
+    # hardest samples first
+    selected_chunks.sort(
+        key=lambda x: x["diff"],
+        reverse=True,
+    )
 
     output = {
-        "labeled_chunks": mismatched_chunks
+        "labeled_chunks": selected_chunks
     }
 
     path = Path(path)

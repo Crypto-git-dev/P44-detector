@@ -385,5 +385,14 @@ def augment_chunk_windows(
                     label=label,
                 )
             )
+        
+        last_start = n - window_hands
+        if last_start % stride != 0:
+            augmented.append(
+                ChunkSample(
+                    chunk=chunk[last_start:last_start + window_hands],
+                    label=label,
+                )
+            )
 
     return augmented

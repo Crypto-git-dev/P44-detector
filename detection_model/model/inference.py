@@ -372,7 +372,7 @@ class Poker44BotDetector:
             for prob in probs:
                 score = float(prob)
                 score = max(0.0, min(1.0, score))
-                all_scores.append(round(1.0 - score, 6))
+                all_scores.append(round(score, 6))
 
         if len(all_scores) != len(chunks):
             raise RuntimeError(
