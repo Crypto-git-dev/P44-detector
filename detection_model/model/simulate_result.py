@@ -207,33 +207,36 @@ def save_mismatches_json(
     samples: List[ChunkSample],
     rows: List[Dict[str, Any]],
     min_diff: float = 0.2,
+    min_chunks: int = 40,
 ) -> None:
-    selected_chunks = []
+    chunks = []
 
     for sample, row in zip(samples, rows):
         true_label = int(sample.label)
         score = float(row["score"])
-
         diff = abs(score - true_label)
 
-        if diff < min_diff:
-            continue
-
-        item = {
+        chunks.append({
             "hands": sample.chunk,
             "is_bot": true_label,
             "score": score,
             "prediction": row["prediction"],
             "diff": diff,
-        }
+        })
 
-        selected_chunks.append(item)
+    # hardest first
+    chunks.sort(key=lambda x: x["diff"], reverse=True)
 
-    # hardest samples first
-    selected_chunks.sort(
-        key=lambda x: x["diff"],
-        reverse=True,
-    )
+    selected_chunks = [
+        x for x in chunks
+        if x["diff"] >= min_diff
+    ]
+
+    # guarantee minimum count
+    selected_chunks = chunks[:max(min_chunks, len(selected_chunks))]
+
+    print(f"saved {len(selected_chunks)} chunks in mismatched json file")
+    print(f"minimum diff in saved chunks: {selected_chunks[-1]['diff']:.4f}")
 
     output = {
         "labeled_chunks": selected_chunks
