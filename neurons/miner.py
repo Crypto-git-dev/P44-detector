@@ -67,7 +67,7 @@ class Miner(BaseMinerNeuron):
         self.xgb_path = os.getenv("P44_XGB_PATH", "")
 
         # These must match how the model was trained.
-        self.window_hands = int(os.getenv("P44_WINDOW_HANDS", "60"))
+        self.window_hands = int(os.getenv("P44_WINDOW_HANDS", "30"))
         self.window_stride = int(os.getenv("P44_WINDOW_STRIDE", "10"))
         self.window_agg = os.getenv("P44_WINDOW_AGG", "mean").lower()
 
@@ -127,12 +127,12 @@ class Miner(BaseMinerNeuron):
 
                 "model_name": os.getenv(
                     "P44_MANIFEST_MODEL_NAME",
-                    "p44-structured-action-chunk-detector",
+                    "p44-ml-30b",
                 ),
 
                 "model_version": os.getenv(
                     "P44_MANIFEST_MODEL_VERSION",
-                    "1.3.0",
+                    "3.1.6",
                 ),
 
                 "framework": os.getenv(
@@ -154,7 +154,7 @@ class Miner(BaseMinerNeuron):
                     "P44_MANIFEST_REPO_COMMIT",
                     os.getenv(
                         "P44_MODEL_REPO_COMMIT",
-                        "023c9ccde49cface05b44d4ae59d1621a4c8e6ac",
+                        "13adf2baa9680f88660bc563e438ee6f2658f33a",
                     ),
                 ),
 
