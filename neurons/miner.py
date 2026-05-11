@@ -7,6 +7,7 @@ import time
 from collections import Counter
 from pathlib import Path
 from typing import Tuple
+from dotenv import load_dotenv
 
 import bittensor as bt
 
@@ -17,6 +18,8 @@ from poker44.utils.model_manifest import (
     manifest_digest,
 )
 from poker44.validator.synapse import DetectionSynapse
+
+load_dotenv()
 
 MODEL_REPO_PATH = "detection_model"
 
@@ -62,7 +65,7 @@ class Miner(BaseMinerNeuron):
         repo_root = Path(__file__).resolve().parents[1]
         model_repo_root = Path(MODEL_REPO_PATH).expanduser()
 
-        self.model_path = "detection_model/artifacts/p44_action_vector_gru_window_v5_7.pt"
+        self.model_path = os.getenv("P44_MODEL_PATH", "detection_model/artifacts/p44_action_vector_gru_window_v5_7.pt")
 
         self.xgb_path = os.getenv("P44_XGB_PATH", "")
 
@@ -74,7 +77,7 @@ class Miner(BaseMinerNeuron):
         self.model_device = os.getenv("P44_MODEL_DEVICE", "cpu")
         self.inference_batch_size = int(os.getenv("P44_INFERENCE_BATCH_SIZE", "64"))
         self.prediction_threshold = float(os.getenv("P44_PREDICTION_THRESHOLD", "0.5"))
-        self.temperature = float(os.getenv("P44_LOGITS_TEMPERATURE", "1.0"))
+        self.temperature = float(os.getenv("P44_LOGITS_TEMPERATURE", "1"))
 
         self.detector = None
 
@@ -132,7 +135,7 @@ class Miner(BaseMinerNeuron):
 
                 "model_version": os.getenv(
                     "P44_MANIFEST_MODEL_VERSION",
-                    "3.1.6",
+                    "3.3.6",
                 ),
 
                 "framework": os.getenv(
@@ -147,7 +150,7 @@ class Miner(BaseMinerNeuron):
 
                 "repo_url": os.getenv(
                     "P44_MANIFEST_REPO_URL",
-                    "https://github.com/Crypto-git-dev/P44-detector",
+                    "",
                 ),
 
                 "repo_commit": os.getenv(
@@ -451,12 +454,28 @@ class Miner(BaseMinerNeuron):
             for score in scores:
                 score = float(score)
                 score = max(0.0, min(1.0, score))
-                clean_scores.append(round(score, 6))
+
+                threshold = self.prediction_threshold
+
+                # Calibrate:
+                # [0, threshold] -> [0, 0.5]
+                # [threshold, 1] -> [0.5, 1]
+                if score <= threshold:
+                    calibrated = (score / threshold) * 0.5
+                else:
+                    calibrated = 0.5 + (
+                        ((score - threshold) / (1.0 - threshold))
+                        * 0.5
+                    )
+
+                calibrated = max(0.0, min(1.0, calibrated))
+
+                clean_scores.append(round(calibrated, 6))
 
             synapse.risk_scores = clean_scores
 
             synapse.predictions = [
-                score >= self.prediction_threshold
+                score >= 0.5
                 for score in clean_scores
             ]
 
