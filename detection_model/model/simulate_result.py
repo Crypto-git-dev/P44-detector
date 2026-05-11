@@ -69,7 +69,7 @@ def load_chunk_dump(path: str) -> List[ChunkSample]:
         samples.append(
             ChunkSample(
                 chunk=chunk["hands"] if "hands" in chunk else chunk,
-                label=chunk.get("is_bot", 0) if isinstance(chunk, dict) else 0,  # true label
+                label=chunk.get("is_bot", -1) if isinstance(chunk, dict) else -1,  # true label
             )
         )
 
@@ -206,13 +206,16 @@ def save_mismatches_json(
     path: str,
     samples: List[ChunkSample],
     rows: List[Dict[str, Any]],
-    min_diff: float = 0.2,
     min_chunks: int = 40,
 ) -> None:
     chunks = []
 
     for sample, row in zip(samples, rows):
         true_label = int(sample.label)
+
+        if true_label < 0:
+            true_label = row["prediction"]
+
         score = float(row["score"])
         diff = abs(score - true_label)
 
@@ -227,16 +230,17 @@ def save_mismatches_json(
     # hardest first
     chunks.sort(key=lambda x: x["diff"], reverse=True)
 
-    selected_chunks = [
-        x for x in chunks
-        if x["diff"] >= min_diff
-    ]
+    half = min_chunks // 2
 
-    # guarantee minimum count
-    selected_chunks = chunks[:max(min_chunks, len(selected_chunks))]
+    bot_chunks = [x for x in chunks if x["is_bot"] == 1][:half]
+    human_chunks = [x for x in chunks if x["is_bot"] == 0][:half]
+
+    selected_chunks = bot_chunks + human_chunks
+
+    # optional: sort again by difficulty
+    selected_chunks.sort(key=lambda x: x["diff"], reverse=True)
 
     print(f"saved {len(selected_chunks)} chunks in mismatched json file")
-    print(f"minimum diff in saved chunks: {selected_chunks[-1]['diff']:.4f}")
 
     output = {
         "labeled_chunks": selected_chunks
@@ -264,6 +268,9 @@ def build_rows(
     for i, (sample, score) in enumerate(zip(samples, scores)):
         pred = int(score >= threshold)
         true = int(sample.label)
+
+        if true < 0:
+            true = pred  # if no true label, treat as correct prediction for metrics and sorting
 
         row = {
             "idx": i,
@@ -368,6 +375,10 @@ def main() -> None:
     if args.out_csv:
         save_csv(args.out_csv, rows)
         print(f"Saved CSV: {args.out_csv}")
+    
+    max_diff = max(abs(r["score"] - r["true_label"]) for r in rows)
+    print(f"\n=== Max Diff ===")
+    print(f"{max_diff:.6f}")
 
 
 if __name__ == "__main__":

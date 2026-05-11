@@ -4,5 +4,6 @@ tools
 outputs
 data
 mismatched
+trajectory
 
 model/simulate_result.py
