@@ -240,6 +240,9 @@ def save_mismatches_json(
     # optional: sort again by difficulty
     selected_chunks.sort(key=lambda x: x["diff"], reverse=True)
 
+    # remove the chunks with diff less than 1e-5
+    selected_chunks = [chunk for chunk in selected_chunks if chunk["diff"] > 1e-5]
+
     print(f"saved {len(selected_chunks)} chunks in mismatched json file")
 
     output = {
