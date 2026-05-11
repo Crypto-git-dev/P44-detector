@@ -94,33 +94,33 @@ class Miner(BaseMinerNeuron):
 
         # Load all chunks from chunks_{date}.json and append chunks from synapse and save back to chunks_{date}.json for transparency and reproducibility.
         # This also allows the miner to have a longer-term view of behavior across multiple synapses
-        try:
-            import json
+        # try:
+        #     import json
 
-            date_str = time.strftime("%Y-%m-%d")
-            chunks_file = Path(f"detection_model/trajectory/chunks_{date_str}.json")
+        #     date_str = time.strftime("%Y-%m-%d")
+        #     chunks_file = Path(f"detection_model/trajectory/chunks_{date_str}.json")
 
-            if chunks_file.exists() and chunks_file.stat().st_size > 0:
-                try:
-                    with open(chunks_file, "r") as f:
-                        all_chunks = json.load(f)
-                except json.JSONDecodeError:
-                    all_chunks = []
-            else:
-                all_chunks = []
+        #     if chunks_file.exists() and chunks_file.stat().st_size > 0:
+        #         try:
+        #             with open(chunks_file, "r") as f:
+        #                 all_chunks = json.load(f)
+        #         except json.JSONDecodeError:
+        #             all_chunks = []
+        #     else:
+        #         all_chunks = []
 
-            all_chunks.extend(chunks)
+        #     all_chunks.extend(chunks)
 
-            # remove duplicates
-            all_chunks = list({
-                json.dumps(chunk, sort_keys=True): chunk
-                for chunk in all_chunks
-            }.values())
+        #     # remove duplicates
+        #     all_chunks = list({
+        #         json.dumps(chunk, sort_keys=True): chunk
+        #         for chunk in all_chunks
+        #     }.values())
             
-            with open(chunks_file, "w") as f:
-                json.dump(all_chunks, f, indent=2)
-        except Exception as e:
-            bt.logging.error(f"Error loading/saving chunks for transparency: {e}")
+        #     with open(chunks_file, "w") as f:
+        #         json.dump(chunks, f, indent=2)
+        # except Exception as e:
+        #     bt.logging.error(f"Error loading/saving chunks for transparency: {e}")
 
         scores = [self.score_chunk(chunk) for chunk in chunks]
         synapse.risk_scores = scores
