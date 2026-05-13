@@ -172,6 +172,12 @@ class HierarchicalChunkClassifier(nn.Module):
         self.action_input_norm = nn.LayerNorm(d_model)
         self.action_input_dropout = nn.Dropout(dropout)
 
+        self.hand_cls_token = nn.Parameter(
+            torch.zeros(1, 1, d_model)
+        )
+
+        nn.init.normal_(self.hand_cls_token, mean=0.0, std=0.02)
+
         # ------------------------------------------------------------------
         # 4. Small Transformer over actions inside each hand
         # ------------------------------------------------------------------
@@ -445,16 +451,37 @@ class HierarchicalChunkClassifier(nn.Module):
             flat_action_mask=flat_action_mask,
         )
 
-        encoded_actions = self.hand_encoder(
-            x,
-            src_key_padding_mask=~flat_action_mask,
+        # Prepend CLS token to each hand action sequence.
+        cls_token = self.hand_cls_token.expand(
+            x.size(0),
+            -1,
+            -1,
         )
 
-        hand_embeddings = self.masked_mean(
-            encoded_actions,
-            flat_action_mask,
+        x = torch.cat(
+            [cls_token, x],
             dim=1,
         )
+
+        # CLS token is always real / unmasked.
+        cls_mask = torch.ones(
+            size=(flat_action_mask.size(0), 1),
+            dtype=torch.bool,
+            device=flat_action_mask.device,
+        )
+
+        extended_action_mask = torch.cat(
+            [cls_mask, flat_action_mask],
+            dim=1,
+        )
+
+        encoded_actions = self.hand_encoder(
+            x,
+            src_key_padding_mask=~extended_action_mask,
+        )
+
+        # Use CLS output as the hand embedding.
+        hand_embeddings = encoded_actions[:, 0, :]
 
         hand_embeddings = self.hand_norm(hand_embeddings)
 
