@@ -328,9 +328,9 @@ class Miner(BaseMinerNeuron):
             end = start + self.window_hands
             windows.append(chunk[start:end])
         
-        last_start = n - self.window_hands
-        if len(windows) == 0 or (start != last_start):
-            windows.append(chunk[last_start:last_start + self.window_hands])
+        # last_start = n - self.window_hands
+        # if len(windows) == 0 or (start != last_start):
+        #     windows.append(chunk[last_start:last_start + self.window_hands])
 
         return windows or [chunk]
 
@@ -345,6 +345,8 @@ class Miner(BaseMinerNeuron):
             return 0.5
 
         scores = [float(s) for s in scores]
+        # bt.logging.info(f"Aggregating window scores: {scores} with method '{self.window_agg}'")
+        
 
         if self.window_agg == "max":
             # Sensitive: if any window looks bot-like, chunk becomes bot-like.
@@ -357,6 +359,9 @@ class Miner(BaseMinerNeuron):
         elif self.window_agg == "mean":
             # Stable: average behavior across all windows.
             value = sum(scores) / len(scores)
+        
+        elif self.window_agg == "zero":
+            value = 0.0
 
         elif self.window_agg == "topk_mean":
             # Balanced: focus on the most suspicious windows without using only max.
@@ -430,6 +435,8 @@ class Miner(BaseMinerNeuron):
         """
 
         chunks = synapse.chunks or []
+
+        bt.logging.info(f"Received synapse from validator hotkey:  {synapse.dendrite.hotkey}")
 
         if not chunks:
             synapse.risk_scores = []
