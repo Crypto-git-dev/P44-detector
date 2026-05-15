@@ -439,6 +439,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-pos-weight", action="store_true")
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
 
+    parser.add_argument(
+        "--calibrate-visible-actions",
+        action="store_true",
+        help="Apply validator-style deterministic visible-action sampling during training.",
+    )
+
+    parser.add_argument(
+        "--visible-action-window-size",
+        type=int,
+        default=8,
+        help="Number of visible actions per hand, matching validator sampling.",
+    )
+
+    parser.add_argument(
+        "--calibrate-validation-visible-actions",
+        action="store_true",
+        help="Also apply validator-style visible-action sampling to validation dataset.",
+    )
+
     return parser.parse_args()
 
 
@@ -538,6 +557,9 @@ def main() -> None:
         action_vectorizer=action_vectorizer,
         feature_vectorizer=vectorizer,
         max_hands=args.max_hands,
+        calibrate_visible_actions=args.calibrate_visible_actions,
+        visible_action_window_size=args.visible_action_window_size,
+        recompute_features_after_calibration=True,
     )
 
     val_ds = HierarchicalPokerChunkDataset(
@@ -545,6 +567,9 @@ def main() -> None:
         action_vectorizer=action_vectorizer,
         feature_vectorizer=vectorizer,
         max_hands=args.max_hands,
+        calibrate_visible_actions=args.calibrate_validation_visible_actions,
+        visible_action_window_size=args.visible_action_window_size,
+        recompute_features_after_calibration=True,
     )
 
     train_loader = DataLoader(
