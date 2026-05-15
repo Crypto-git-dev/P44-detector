@@ -73,7 +73,7 @@ def _sample_visible_indices(
         for idx in range(1, total - 1)
         if idx not in picked
     ]
-
+ 
     ordered_middle = sorted(middle, key=_sort_key)
 
     for idx in ordered_middle:
