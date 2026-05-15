@@ -9,6 +9,7 @@ import torch
 from .action_vectorizer import ActionVectorizer
 from .features import FeatureVectorizer
 from .hierarchical_model import HierarchicalChunkClassifier
+from .hierarchical_dataset import calibrate_chunk_visible_actions
 
 
 class Poker44BotDetector:
@@ -357,6 +358,13 @@ class Poker44BotDetector:
         all_scores: List[float] = []
 
         self.model.eval()
+
+        for i, chunk in enumerate(chunks):
+            chunks[i] = calibrate_chunk_visible_actions(
+                chunk,
+                window_size=8,
+                chunk_id=None,
+            )
 
         for start in range(0, len(chunks), batch_size):
             end = start + batch_size
