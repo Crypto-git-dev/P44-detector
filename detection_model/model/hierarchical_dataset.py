@@ -12,6 +12,7 @@ from .action_vectorizer import ActionVectorizer
 import copy
 import hashlib
 from typing import Optional
+import random
 
 def _sample_visible_indices(
     total: int,
@@ -164,7 +165,8 @@ class HierarchicalPokerChunkDataset(Dataset):
         feature_vectorizer,
         max_hands: int,
         calibrate_visible_actions: bool = False,
-        visible_action_window_size: int = 8,
+        min_visible_action_window_size: int = 5,
+        max_visible_action_window_size: int = 8,
         recompute_features_after_calibration: bool = True,
     ):
         self.samples = samples
@@ -173,7 +175,8 @@ class HierarchicalPokerChunkDataset(Dataset):
         self.max_hands = int(max_hands)
 
         self.calibrate_visible_actions = bool(calibrate_visible_actions)
-        self.visible_action_window_size = int(visible_action_window_size)
+        self.min_visible_action_window_size = int(min_visible_action_window_size)
+        self.max_visible_action_window_size = int(max_visible_action_window_size)
         self.recompute_features_after_calibration = bool(
             recompute_features_after_calibration
         )
@@ -193,7 +196,10 @@ class HierarchicalPokerChunkDataset(Dataset):
         if self.calibrate_visible_actions:
             chunk = calibrate_chunk_visible_actions(
                 chunk,
-                window_size=self.visible_action_window_size,
+                window_size=random.randint(
+                    self.min_visible_action_window_size,
+                    self.max_visible_action_window_size
+                ),
                 chunk_id=str(chunk_id),
             )
 

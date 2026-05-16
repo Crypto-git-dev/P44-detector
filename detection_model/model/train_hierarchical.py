@@ -446,10 +446,17 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--visible-action-window-size",
+        "--min-visible-action-window-size",
+        type=int,
+        default=5,
+        help="Minimum number of visible actions per hand, matching validator sampling.",
+    )
+
+    parser.add_argument(
+        "--max-visible-action-window-size",
         type=int,
         default=8,
-        help="Number of visible actions per hand, matching validator sampling.",
+        help="Maximum number of visible actions per hand, matching validator sampling.",
     )
 
     parser.add_argument(
@@ -558,7 +565,8 @@ def main() -> None:
         feature_vectorizer=vectorizer,
         max_hands=args.max_hands,
         calibrate_visible_actions=args.calibrate_visible_actions,
-        visible_action_window_size=args.visible_action_window_size,
+        min_visible_action_window_size=args.min_visible_action_window_size,
+        max_visible_action_window_size=args.max_visible_action_window_size,
         recompute_features_after_calibration=True,
     )
 
@@ -568,7 +576,8 @@ def main() -> None:
         feature_vectorizer=vectorizer,
         max_hands=args.max_hands,
         calibrate_visible_actions=args.calibrate_validation_visible_actions,
-        visible_action_window_size=args.visible_action_window_size,
+        min_visible_action_window_size=args.min_visible_action_window_size,
+        max_visible_action_window_size=args.max_visible_action_window_size,
         recompute_features_after_calibration=True,
     )
 
