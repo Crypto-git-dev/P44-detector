@@ -134,9 +134,9 @@ def make_windows_for_chunk(
     for start in range(0, n - window_hands + 1, window_stride):
         windows.append(chunk[start:start + window_hands])
 
-    last_start = n - window_hands
-    if len(windows) == 0 or (start != last_start):
-        windows.append(chunk[last_start:last_start + window_hands])
+    # last_start = n - window_hands
+    # if len(windows) == 0 or (start != last_start):
+    #     windows.append(chunk[last_start:last_start + window_hands])
 
     return windows
 

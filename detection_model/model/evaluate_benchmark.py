@@ -508,7 +508,7 @@ def main() -> None:
     print(f"Human labels: {int((labels == 0).sum())}")
     print(f"Bot labels: {int((labels == 1).sum())}")
     print(f"Threshold: {threshold}")
-    print(f"XGBoost enabled: {bool(args.xgb_model)}")
+    print(f"XGBoost enabled: {bool(getattr(detector, 'xgb_model', None))}")
 
     # Mode 2:
     # Original chunks -> windows -> aggregate back to original chunks.

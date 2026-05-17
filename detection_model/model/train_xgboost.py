@@ -5,40 +5,35 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import joblib
 import numpy as np
-import torch
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
-    brier_score_loss,
     confusion_matrix,
     log_loss,
     roc_auc_score,
 )
-from torch.utils.data import DataLoader
+from sklearn.ensemble import HistGradientBoostingClassifier
 from tqdm import tqdm
-from xgboost import XGBClassifier
 
-from .dataset import augment_chunk_windows, load_public_benchmark
-from .features import FeatureVectorizer
-from .hierarchical_dataset import (
-    HierarchicalPokerChunkDataset,
-    hierarchical_collate_batch,
-)
-from .hierarchical_model import HierarchicalChunkClassifier
-from .hierarchical_tokenizer import HandActionTokenizer
+from .dataset import ChunkSample, augment_chunk_windows, load_public_benchmark
+from .inference import Poker44BotDetector
+from .train_hierarchical import find_best_threshold
+
+
+try:
+    from xgboost import XGBClassifier  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    XGBClassifier = None
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train XGBoost on hierarchical Poker44 chunk embeddings."
+        description="Train a tree head on top of the hierarchical PyTorch chunk encoder."
     )
-
     parser.add_argument("--data", required=True)
     parser.add_argument("--torch-model", required=True)
     parser.add_argument("--out", default="artifacts/p44_xgb_detector.joblib")
-
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--batch-size", type=int, default=64)
 
@@ -49,7 +44,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep-short-window-chunks", action="store_true")
 
     parser.add_argument("--threshold", type=float, default=0.5)
-
     parser.add_argument("--n-estimators", type=int, default=500)
     parser.add_argument("--max-depth", type=int, default=3)
     parser.add_argument("--learning-rate", type=float, default=0.03)
@@ -57,132 +51,146 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--colsample-bytree", type=float, default=0.9)
     parser.add_argument("--reg-lambda", type=float, default=2.0)
     parser.add_argument("--reg-alpha", type=float, default=0.0)
-
+    parser.add_argument("--seed", type=int, default=44)
+    parser.add_argument("--no-auto-threshold", action="store_true")
     return parser.parse_args()
 
 
-def load_torch_artifact(
-    path: str | Path,
-    device: torch.device,
-) -> Tuple[HierarchicalChunkClassifier, HandActionTokenizer, FeatureVectorizer, Dict[str, Any]]:
-    path = Path(path)
+def apply_window_augmentation(
+    samples: List[ChunkSample],
+    *,
+    enabled: bool,
+    window_hands: int,
+    window_stride: int,
+    keep_short: bool,
+    name: str,
+) -> List[ChunkSample]:
+    if not enabled:
+        return samples
 
-    if not path.exists():
-        raise FileNotFoundError(f"Torch model artifact not found: {path}")
-
-    artifact = torch.load(path, map_location=device)
-
-    tokenizer = HandActionTokenizer.from_state_dict(artifact["tokenizer"])
-    vectorizer = FeatureVectorizer.from_state_dict(artifact["vectorizer"])
-
-    model_config = artifact["model_config"]
-
-    model = HierarchicalChunkClassifier(**model_config)
-    model.load_state_dict(artifact["model_state_dict"])
-    model.to(device)
-    model.eval()
-
-    return model, tokenizer, vectorizer, artifact
+    before = len(samples)
+    out = augment_chunk_windows(
+        samples,
+        window_hands=window_hands,
+        stride=window_stride,
+        keep_short_chunks=keep_short,
+    )
+    print(
+        f"{name} window chunks: {before} -> {len(out)} "
+        f"(window_hands={window_hands}, stride={window_stride})"
+    )
+    return out
 
 
-@torch.no_grad()
-def extract_xgb_matrix(
-    model: HierarchicalChunkClassifier,
-    tokenizer: HandActionTokenizer,
-    vectorizer: FeatureVectorizer,
-    samples,
-    device: torch.device,
+def extract_features(
+    detector: Poker44BotDetector,
+    samples: List[ChunkSample],
     batch_size: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    dataset = HierarchicalPokerChunkDataset(
-        samples=samples,
-        tokenizer=tokenizer,
-        vectorizer=vectorizer,
-    )
+    rows: List[np.ndarray] = []
+    labels: List[int] = []
 
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=0,
-        drop_last=False,
-        collate_fn=lambda b: hierarchical_collate_batch(
-            b,
-            pad_id=tokenizer.pad_id,
-        ),
-    )
+    detector.model.eval()
 
-    all_x: List[np.ndarray] = []
-    all_y: List[np.ndarray] = []
+    chunks = [sample.chunk for sample in samples]
+    labels = [int(sample.label) for sample in samples]
 
-    for batch in tqdm(loader, desc="extract embeddings"):
-        action_ids = batch["action_ids"].to(device)
-        action_mask = batch["action_mask"].to(device)
-        hand_mask = batch["hand_mask"].to(device)
-        features = batch["features"].to(device)
-        labels = batch["labels"].detach().cpu().numpy().astype(np.int32)
+    for start in tqdm(range(0, len(chunks), batch_size), desc="extract embeddings"):
+        batch_chunks = chunks[start:start + batch_size]
+        batch = detector._make_inference_batch(batch_chunks)
 
-        chunk_embedding = model.extract_chunk_embedding(
-            action_ids=action_ids,
-            action_mask=action_mask,
-            hand_mask=hand_mask,
+        chunk_embedding = detector.model.extract_chunk_embedding(
+            action_cat=batch["action_cat"],
+            action_num=batch["action_num"],
+            action_mask=batch["action_mask"],
+            hand_mask=batch["hand_mask"],
+            hand_num=batch.get("hand_num"),
         )
 
         emb_np = chunk_embedding.detach().cpu().numpy().astype(np.float32)
-        feat_np = features.detach().cpu().numpy().astype(np.float32)
+        feat_np = batch["features"].detach().cpu().numpy().astype(np.float32)
+        rows.append(np.concatenate([emb_np, feat_np], axis=1))
 
-        # Final XGBoost input:
-        # neural chunk embedding + engineered chunk features
-        x = np.concatenate([emb_np, feat_np], axis=1)
+    if not rows:
+        raise RuntimeError("No samples available for XGBoost training.")
 
-        all_x.append(x)
-        all_y.append(labels)
-
-    X = np.concatenate(all_x, axis=0)
-    y = np.concatenate(all_y, axis=0)
-
-    return X, y
+    return np.vstack(rows).astype(np.float32), np.asarray(labels, dtype=np.int32)
 
 
-def compute_metrics(
-    y_true: np.ndarray,
-    scores: np.ndarray,
-    threshold: float,
-) -> Dict[str, Any]:
+def make_classifier(args: argparse.Namespace, y_train: np.ndarray) -> Any:
+    if XGBClassifier is not None:
+        pos = float((y_train == 1).sum())
+        neg = float((y_train == 0).sum())
+        scale_pos_weight = neg / max(pos, 1.0)
+        return XGBClassifier(
+            n_estimators=args.n_estimators,
+            max_depth=args.max_depth,
+            learning_rate=args.learning_rate,
+            subsample=args.subsample,
+            colsample_bytree=args.colsample_bytree,
+            reg_lambda=args.reg_lambda,
+            reg_alpha=args.reg_alpha,
+            objective="binary:logistic",
+            eval_metric="logloss",
+            tree_method="hist",
+            random_state=args.seed,
+            n_jobs=0,
+            scale_pos_weight=scale_pos_weight,
+        )
+
+    print("xgboost is not installed; using sklearn HistGradientBoostingClassifier fallback.")
+    return HistGradientBoostingClassifier(
+        max_iter=args.n_estimators,
+        max_leaf_nodes=max(2, 2 ** int(args.max_depth)),
+        learning_rate=args.learning_rate,
+        l2_regularization=args.reg_lambda,
+        random_state=args.seed,
+    )
+
+
+def predict_proba(model: Any, x: np.ndarray) -> np.ndarray:
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba(x)
+        if proba.ndim == 2 and proba.shape[1] > 1:
+            return np.asarray(proba[:, 1], dtype=np.float32)
+        return np.asarray(proba, dtype=np.float32).reshape(-1)
+
+    raw = np.asarray(model.predict(x), dtype=np.float32).reshape(-1)
+    if raw.min() < 0.0 or raw.max() > 1.0:
+        raw = 1.0 / (1.0 + np.exp(-raw))
+    return raw
+
+
+def compute_metrics(labels: np.ndarray, scores: np.ndarray, threshold: float) -> Dict[str, Any]:
+    scores = np.asarray(scores, dtype=np.float32).clip(1e-6, 1 - 1e-6)
+    labels = np.asarray(labels, dtype=np.int32)
     preds = (scores >= threshold).astype(np.int32)
+    cm = confusion_matrix(labels, preds, labels=[0, 1])
 
     metrics: Dict[str, Any] = {
-        "count": int(len(y_true)),
+        "count": int(len(labels)),
         "threshold": float(threshold),
-        "human_count": int((y_true == 0).sum()),
-        "bot_count": int((y_true == 1).sum()),
+        "accuracy": float(accuracy_score(labels, preds)) if len(labels) else 0.0,
         "score_min": float(scores.min()) if len(scores) else 0.0,
         "score_max": float(scores.max()) if len(scores) else 0.0,
         "score_mean": float(scores.mean()) if len(scores) else 0.0,
-        "accuracy": float(accuracy_score(y_true, preds)),
+        "confusion_matrix": {
+            "tn_human_pred_human": int(cm[0, 0]),
+            "fp_human_pred_bot": int(cm[0, 1]),
+            "fn_bot_pred_human": int(cm[1, 0]),
+            "tp_bot_pred_bot": int(cm[1, 1]),
+        },
     }
+    metrics.update(find_best_threshold(labels, scores))
 
-    cm = confusion_matrix(y_true, preds, labels=[0, 1])
-
-    metrics["confusion_matrix"] = {
-        "tn_human_pred_human": int(cm[0, 0]),
-        "fp_human_pred_bot": int(cm[0, 1]),
-        "fn_bot_pred_human": int(cm[1, 0]),
-        "tp_bot_pred_bot": int(cm[1, 1]),
-    }
-
-    if len(set(y_true.tolist())) > 1:
-        clipped = np.clip(scores, 1e-6, 1 - 1e-6)
-
-        metrics["roc_auc"] = float(roc_auc_score(y_true, scores))
-        metrics["pr_auc"] = float(average_precision_score(y_true, scores))
-        metrics["log_loss"] = float(log_loss(y_true, clipped, labels=[0, 1]))
-        metrics["brier"] = float(brier_score_loss(y_true, scores))
+    if len(set(labels.tolist())) > 1:
+        metrics["log_loss"] = float(log_loss(labels, scores, labels=[0, 1]))
+        metrics["roc_auc"] = float(roc_auc_score(labels, scores))
+        metrics["pr_auc"] = float(average_precision_score(labels, scores))
     else:
-        metrics["roc_auc"] = None
-        metrics["pr_auc"] = None
-        metrics["log_loss"] = None
-        metrics["brier"] = None
+        metrics["log_loss"] = 0.0
+        metrics["roc_auc"] = 0.0
+        metrics["pr_auc"] = 0.0
 
     return metrics
 
@@ -190,117 +198,76 @@ def compute_metrics(
 def main() -> None:
     args = parse_args()
 
-    device = torch.device(args.device)
-    print(f"Using device: {device}")
+    train_samples, val_samples = load_public_benchmark(args.data, seed=args.seed)
+    train_samples = apply_window_augmentation(
+        train_samples,
+        enabled=args.augment_windows,
+        window_hands=args.window_hands,
+        window_stride=args.window_stride,
+        keep_short=args.keep_short_window_chunks,
+        name="Train",
+    )
+    val_samples = apply_window_augmentation(
+        val_samples,
+        enabled=args.augment_validation_windows,
+        window_hands=args.window_hands,
+        window_stride=args.window_stride,
+        keep_short=args.keep_short_window_chunks,
+        name="Validation",
+    )
 
     print(f"Loading hierarchical torch model: {args.torch_model}")
-    model, tokenizer, vectorizer, torch_artifact = load_torch_artifact(
-        args.torch_model,
-        device=device,
+    detector = Poker44BotDetector.load(args.torch_model, device=args.device)
+
+    x_train, y_train = extract_features(detector, train_samples, args.batch_size)
+    x_val, y_val = extract_features(detector, val_samples, args.batch_size)
+
+    print(f"Train feature matrix: {x_train.shape}")
+    print(f"Validation feature matrix: {x_val.shape}")
+
+    model = make_classifier(args, y_train)
+    model.fit(x_train, y_train)
+
+    train_scores = predict_proba(model, x_train)
+    val_scores = predict_proba(model, x_val)
+
+    val_threshold = float(args.threshold)
+    val_metrics_at_fixed = compute_metrics(y_val, val_scores, threshold=val_threshold)
+    selected_threshold = (
+        float(val_metrics_at_fixed.get("best_threshold", args.threshold))
+        if not args.no_auto_threshold
+        else float(args.threshold)
     )
 
-    train_samples, val_samples = load_public_benchmark(args.data)
+    train_metrics = compute_metrics(y_train, train_scores, threshold=selected_threshold)
+    val_metrics = compute_metrics(y_val, val_scores, threshold=selected_threshold)
 
-    if args.augment_windows:
-        before = len(train_samples)
-        train_samples = augment_chunk_windows(
-            train_samples,
-            window_hands=args.window_hands,
-            stride=args.window_stride,
-            keep_short_chunks=args.keep_short_window_chunks,
-        )
-        print(f"Train windows: {before} -> {len(train_samples)}")
-
-    if args.augment_validation_windows:
-        before = len(val_samples)
-        val_samples = augment_chunk_windows(
-            val_samples,
-            window_hands=args.window_hands,
-            stride=args.window_stride,
-            keep_short_chunks=args.keep_short_window_chunks,
-        )
-        print(f"Validation windows: {before} -> {len(val_samples)}")
-
-    print("Extracting train matrix...")
-    X_train, y_train = extract_xgb_matrix(
-        model=model,
-        tokenizer=tokenizer,
-        vectorizer=vectorizer,
-        samples=train_samples,
-        device=device,
-        batch_size=args.batch_size,
-    )
-
-    print("Extracting validation matrix...")
-    X_val, y_val = extract_xgb_matrix(
-        model=model,
-        tokenizer=tokenizer,
-        vectorizer=vectorizer,
-        samples=val_samples,
-        device=device,
-        batch_size=args.batch_size,
-    )
-
-    print("X_train:", X_train.shape)
-    print("X_val:", X_val.shape)
-    print("Train labels human/bot:", int((y_train == 0).sum()), int((y_train == 1).sum()))
-    print("Val labels human/bot:", int((y_val == 0).sum()), int((y_val == 1).sum()))
-
-    scale_pos_weight = float((y_train == 0).sum()) / max(1.0, float((y_train == 1).sum()))
-
-    clf = XGBClassifier(
-        n_estimators=args.n_estimators,
-        max_depth=args.max_depth,
-        learning_rate=args.learning_rate,
-        subsample=args.subsample,
-        colsample_bytree=args.colsample_bytree,
-        reg_lambda=args.reg_lambda,
-        reg_alpha=args.reg_alpha,
-        objective="binary:logistic",
-        eval_metric="logloss",
-        tree_method="hist",
-        scale_pos_weight=scale_pos_weight,
-        random_state=44,
-    )
-
-    print("Training XGBoost...")
-    clf.fit(
-        X_train,
-        y_train,
-        eval_set=[(X_val, y_val)],
-        verbose=True,
-    )
-
-    train_scores = clf.predict_proba(X_train)[:, 1]
-    val_scores = clf.predict_proba(X_val)[:, 1]
-
-    train_metrics = compute_metrics(y_train, train_scores, args.threshold)
-    val_metrics = compute_metrics(y_val, val_scores, args.threshold)
-
-    print("\n=== Train metrics ===")
+    print("Train metrics:")
     print(json.dumps(train_metrics, indent=2))
-
-    print("\n=== Validation metrics ===")
+    print("Validation metrics:")
     print(json.dumps(val_metrics, indent=2))
+    print(f"Selected threshold: {selected_threshold:.6f}")
 
-    out_path = Path(args.out)
+    out_path = Path(args.out).expanduser()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    try:
+        import joblib
+    except Exception as exc:  # pragma: no cover
+        raise ImportError("joblib is required to save the trained tree head.") from exc
+
     payload = {
-        "xgb_model": clf,
-        "torch_model_path": str(args.torch_model),
-        "threshold": float(args.threshold),
-        "window_hands": int(args.window_hands),
-        "window_stride": int(args.window_stride),
-        "xgb_input_dim": int(X_train.shape[1]),
+        "xgb_model": model,
+        "model": model,
+        "threshold": selected_threshold,
+        "feature_dim": int(x_train.shape[1]),
+        "backend": "xgboost" if XGBClassifier is not None else "sklearn_hist_gradient_boosting",
+        "args": vars(args),
         "train_metrics": train_metrics,
-        "val_metrics": val_metrics,
-        "feature_description": "concat(chunk_embedding, engineered_chunk_features)",
+        "validation_metrics": val_metrics,
     }
-
     joblib.dump(payload, out_path)
-
-    print(f"\nSaved XGBoost detector to: {out_path}")
+    print(f"Saved tree head to: {out_path}")
 
 
 if __name__ == "__main__":

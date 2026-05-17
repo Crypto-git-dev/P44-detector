@@ -14,6 +14,7 @@ import numpy as np
 class ChunkSample:
     chunk: List[Dict[str, Any]]
     label: int  # 0 = human, 1 = bot
+    chunk_id: str | None = None
 
 
 def _open_json_or_gz(path: str | Path) -> Any:
@@ -121,7 +122,14 @@ def _items_to_samples(items: List[Any]) -> List[ChunkSample]:
             if not chunk:
                 skipped += 1
                 continue
-            samples.append(ChunkSample(chunk=chunk, label=label))
+            chunk_id = (
+                item.get("chunk_id")
+                or item.get("id")
+                or item.get("sample_id")
+                or item.get("uid")
+                or f"sample_{idx}"
+            )
+            samples.append(ChunkSample(chunk=chunk, label=label, chunk_id=str(chunk_id)))
         except Exception as exc:
             skipped += 1
             if skipped <= 5:
@@ -186,13 +194,36 @@ def _extract_root_items(obj: Any) -> Tuple[Optional[List[Any]], Optional[List[An
 
 
 def _random_split(samples: List[ChunkSample], val_ratio: float, seed: int) -> Tuple[List[ChunkSample], List[ChunkSample]]:
+    """Deterministic stratified split when both classes are present."""
+
     if not samples:
         return [], []
+
     rng = random.Random(seed)
-    samples = list(samples)
-    rng.shuffle(samples)
-    n_val = max(1, int(len(samples) * val_ratio))
-    return samples[n_val:], samples[:n_val]
+    by_label: Dict[int, List[ChunkSample]] = {}
+    for sample in samples:
+        by_label.setdefault(int(sample.label), []).append(sample)
+
+    if len(by_label) < 2:
+        shuffled = list(samples)
+        rng.shuffle(shuffled)
+        n_val = max(1, int(len(shuffled) * val_ratio))
+        return shuffled[n_val:], shuffled[:n_val]
+
+    train: List[ChunkSample] = []
+    val: List[ChunkSample] = []
+
+    for label, label_samples in sorted(by_label.items()):
+        label_samples = list(label_samples)
+        rng.shuffle(label_samples)
+        n_val = max(1, int(round(len(label_samples) * val_ratio)))
+        n_val = min(n_val, max(1, len(label_samples) - 1)) if len(label_samples) > 1 else 1
+        val.extend(label_samples[:n_val])
+        train.extend(label_samples[n_val:])
+
+    rng.shuffle(train)
+    rng.shuffle(val)
+    return train, val
 
 
 def _print_dataset_summary(name: str, samples: List[ChunkSample]) -> None:
@@ -278,7 +309,7 @@ def augment_chunk_prefixes(
         for prefix_len in prefix_lengths:
             if prefix_len == n and not include_full_chunk:
                 continue
-            augmented.append(ChunkSample(chunk=chunk[:prefix_len], label=sample.label))
+            augmented.append(ChunkSample(chunk=chunk[:prefix_len], label=sample.label, chunk_id=f"{sample.chunk_id or 'chunk'}:prefix:{prefix_len}"))
     return augmented
 
 
@@ -318,7 +349,7 @@ def augment_chunk_sliding_windows(
             starts = sorted(set(starts))
 
         for start in starts:
-            augmented.append(ChunkSample(chunk=chunk[start:start + window_hands], label=sample.label))
+            augmented.append(ChunkSample(chunk=chunk[start:start + window_hands], label=sample.label, chunk_id=f"{sample.chunk_id or 'chunk'}:window:{start}:{start + window_hands}"))
     return augmented
 
 
@@ -372,6 +403,7 @@ def augment_chunk_windows(
                     ChunkSample(
                         chunk=chunk,
                         label=label,
+                        chunk_id=f"{sample.chunk_id or sample_idx}:short",
                     )
                 )
             continue
@@ -383,6 +415,7 @@ def augment_chunk_windows(
                 ChunkSample(
                     chunk=chunk[start:end],
                     label=label,
+                    chunk_id=f"{sample.chunk_id or sample_idx}:window:{start}:{end}",
                 )
             )
         

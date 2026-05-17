@@ -1,68 +1,81 @@
-# Poker44 Chunk Bot Detector Starter
+# Poker44 Detection Model
 
-This starter trains a chunk-level bot probability model for Poker44 miner inference.
+Updated detection model project using the first hierarchical model architecture with a final XGBoost head.
 
-It is designed around the current miner contract:
+## What changed
 
-- input: `DetectionSynapse(chunks=...)`
-- each chunk: a list of sanitized hands
-- output: one `risk_score` per chunk
-- score: `P(chunk is bot)`
+- Restored the first-model backbone:
+  - action categorical embeddings
+  - compact numeric action projection
+  - action Transformer with CLS token per hand
+  - GRU over hands
+  - attention pooling for chunk embedding
+- Removed the extra `model/train_xgboost.py` step.
+- `model/train_hierarchical.py` now trains the neural encoder and then trains/saves XGBoost as the final classifier inside the same `.pt` artifact.
+- Simplified feature engineering to compact, essential chunk-level signals only.
+- Removed wide per-seat hand feature expansion and hand-feature fusion/gating.
+- Updated inference, benchmark, simulation, tools compatibility, and dashboard to use the embedded XGBoost head automatically.
+- Cleaned dashboard run logs/history from the packaged project.
 
 ## Install
 
 ```bash
-cd p44_miner_starter
+cd detection_model
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-## Build public benchmark inside Poker44-subnet
-
-From the Poker44 subnet repo:
-
-```bash
-python scripts/publish/publish_public_benchmark.py --skip-wandb
-```
-
-Expected default:
-
-```text
-data/public_miner_benchmark.json.gz
 ```
 
 ## Train
 
 ```bash
-python -m model.train \
-  --data ~/Poker44-subnet/data/public_miner_benchmark.json.gz \
-  --out artifacts/p44_chunk_detector.pt \
-  --epochs 8 \
-  --batch-size 64
+python -m model.train_hierarchical \
+  --data data/public_miner_benchmark.json.gz \
+  --out artifacts/p44_first_arch_xgb.pt \
+  --epochs 60 \
+  --batch-size 8 \
+  --augment-windows \
+  --augment-validation-windows \
+  --window-hands 4 \
+  --window-stride 1 \
+  --overwrite
 ```
 
-## Use in miner inference
+The output artifact contains both:
 
-```python
-from p44_miner_model.inference import Poker44BotDetector
-from p44_miner_model.manifest import build_model_manifest
+- the neural hierarchical encoder weights
+- the final XGBoost classifier head
 
-DETECTOR = Poker44BotDetector.load("artifacts/p44_chunk_detector.pt")
-MANIFEST = build_model_manifest(
-    repo_url="https://github.com/YOUR_NAME/YOUR_REPO",
-    repo_commit="YOUR_COMMIT_SHA",
-    artifact_path="artifacts/p44_chunk_detector.pt",
-)
+## Predict
 
-def forward(self, synapse):
-    scores = DETECTOR.predict_chunks(synapse.chunks)
-    synapse.risk_scores = scores
-    synapse.predictions = [s >= 0.5 for s in scores]
-    synapse.model_manifest = MANIFEST
-    return synapse
+```bash
+python -m model.simulate_result \
+  --data data/chunks.json \
+  --model artifacts/p44_first_arch_xgb.pt \
+  --out-csv outputs/predictions.csv
 ```
 
-## Important safety / compliance note
+No separate `--xgb-model` is required for new artifacts because XGBoost is embedded in the `.pt` file.
+
+## Benchmark
+
+```bash
+python -m model.evaluate_benchmark \
+  --data data/public_miner_benchmark.json.gz \
+  --model artifacts/p44_first_arch_xgb.pt \
+  --split all \
+  --out-csv outputs/benchmark_predictions.csv \
+  --out-json outputs/benchmark_metrics.json
+```
+
+## Dashboard
+
+```bash
+streamlit run dashboard/training_dashboard.py
+```
+
+The dashboard Train tab now maps to the single integrated training command and exposes the final XGBoost parameters there.
+
+## Compliance note
 
 Train only on public benchmark data and your own legal synthetic simulations. Do not train on validator-only evaluation payloads, live `/internal/eval/current` batches, leaked data, or payload hashes.

@@ -2,3 +2,5 @@ torch
 numpy
 scikit-learn
 tqdm
+joblib
+xgboost

@@ -1,57 +1,44 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import copy
+import hashlib
+import random
+from typing import Any, Dict, List, Optional
 
 import torch
 from torch.utils.data import Dataset
 
-from .dataset import ChunkSample
-from .features import FeatureVectorizer
-from .action_vectorizer import ActionVectorizer
-
-import copy
-import hashlib
-from typing import Optional
-import random
 
 def _sample_visible_indices(
     total: int,
     *,
     window_size: int,
-    seed_parts: list[str],
-    actions: Optional[list[dict]] = None,
-) -> list[int]:
+    seed_parts: List[str],
+    actions: Optional[List[Dict[str, Any]]] = None,
+) -> List[int]:
     """
     Match validator-style deterministic visible-action sampling.
 
-    Keeps:
-      - first action
-      - last action
-      - at least one action from each street bucket when possible
-      - deterministic sampled middle actions
-
-    Important:
-      This preserves chronological order by returning sorted indices.
+    Keeps first/last action, at least one action from each street bucket when
+    possible, then deterministic sampled middle actions. Chronological order is
+    preserved.
     """
-
-    if total <= 1:
-        return [0] * max(1, window_size)
-
+    window_size = max(1, int(window_size))
+    if total <= 0:
+        return []
+    if total == 1:
+        return [0]
     if total <= window_size:
         return list(range(total))
 
     seed = "|".join(seed_parts).encode("utf-8", errors="ignore")
 
     def _sort_key(index: int, extra: str = "") -> bytes:
-        return hashlib.sha256(
-            seed + f":{index}:{extra}".encode("utf-8")
-        ).digest()
+        return hashlib.sha256(seed + f":{index}:{extra}".encode("utf-8")).digest()
 
     picked = {0, total - 1}
-
     if actions:
-        street_buckets: dict[str, list[int]] = {}
-
+        street_buckets: Dict[str, List[int]] = {}
         for idx in range(1, total - 1):
             action = actions[idx] if idx < len(actions) else {}
             street = str(action.get("street", "") or "preflop").lower()
@@ -60,50 +47,28 @@ def _sample_visible_indices(
         for street in sorted(street_buckets.keys()):
             if len(picked) >= window_size:
                 break
-
-            ordered = sorted(
-                street_buckets[street],
-                key=lambda idx: _sort_key(idx, street),
-            )
-
+            ordered = sorted(street_buckets[street], key=lambda idx: _sort_key(idx, street))
             if ordered:
                 picked.add(ordered[0])
 
-    middle = [
-        idx
-        for idx in range(1, total - 1)
-        if idx not in picked
-    ]
- 
-    ordered_middle = sorted(middle, key=_sort_key)
-
-    for idx in ordered_middle:
+    middle = [idx for idx in range(1, total - 1) if idx not in picked]
+    for idx in sorted(middle, key=_sort_key):
         if len(picked) >= window_size:
             break
-
         picked.add(idx)
 
     return sorted(picked)
 
 
 def calibrate_hand_visible_actions(
-    hand: dict,
+    hand: Dict[str, Any],
     *,
     window_size: int,
-    seed_parts: list[str],
-) -> dict:
-    """
-    Apply validator-style visible-action sampling to one hand.
-
-    This creates a copied hand with sampled actions.
-    Original hand is not mutated.
-    """
-
+    seed_parts: List[str],
+) -> Dict[str, Any]:
     if not isinstance(hand, dict):
         return hand
-
     actions = hand.get("actions") or []
-
     if not isinstance(actions, list) or not actions:
         return hand
 
@@ -113,40 +78,22 @@ def calibrate_hand_visible_actions(
         seed_parts=seed_parts,
         actions=actions,
     )
-
-    sampled_actions = []
-
-    for idx in indices:
-        if 0 <= idx < len(actions):
-            sampled_actions.append(actions[idx])
-
+    sampled_actions = [actions[idx] for idx in indices if 0 <= idx < len(actions)]
     new_hand = copy.deepcopy(hand)
     new_hand["actions"] = sampled_actions
-
     return new_hand
 
 
 def calibrate_chunk_visible_actions(
-    chunk: list[dict],
+    chunk: List[Dict[str, Any]],
     *,
     window_size: int,
     chunk_id: str,
-) -> list[dict]:
-    """
-    Apply validator-style visible-action sampling to every hand in one chunk.
-    """
-
-    calibrated: list[dict] = []
-
+) -> List[Dict[str, Any]]:
+    calibrated: List[Dict[str, Any]] = []
     for hand_idx, hand in enumerate(chunk):
         actions = hand.get("actions") or [] if isinstance(hand, dict) else []
-
-        seed_parts = [
-            str(chunk_id),
-            f"hand_{hand_idx}",
-            f"actions_{len(actions)}",
-        ]
-
+        seed_parts = [str(chunk_id), f"hand_{hand_idx}", f"actions_{len(actions)}"]
         calibrated.append(
             calibrate_hand_visible_actions(
                 hand,
@@ -154,8 +101,8 @@ def calibrate_chunk_visible_actions(
                 seed_parts=seed_parts,
             )
         )
-
     return calibrated
+
 
 class HierarchicalPokerChunkDataset(Dataset):
     def __init__(
@@ -173,13 +120,12 @@ class HierarchicalPokerChunkDataset(Dataset):
         self.action_vectorizer = action_vectorizer
         self.feature_vectorizer = feature_vectorizer
         self.max_hands = int(max_hands)
-
         self.calibrate_visible_actions = bool(calibrate_visible_actions)
-        self.min_visible_action_window_size = int(min_visible_action_window_size)
-        self.max_visible_action_window_size = int(max_visible_action_window_size)
-        self.recompute_features_after_calibration = bool(
-            recompute_features_after_calibration
-        )
+        self.min_visible_action_window_size = max(1, int(min_visible_action_window_size))
+        self.max_visible_action_window_size = max(1, int(max_visible_action_window_size))
+        if self.max_visible_action_window_size < self.min_visible_action_window_size:
+            self.max_visible_action_window_size = self.min_visible_action_window_size
+        self.recompute_features_after_calibration = bool(recompute_features_after_calibration)
 
         chunks = [sample.chunk for sample in samples]
         self.feature_matrix = feature_vectorizer.transform(chunks)
@@ -187,19 +133,19 @@ class HierarchicalPokerChunkDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         sample = self.samples[idx]
-
         chunk = sample.chunk
         chunk_id = getattr(sample, "chunk_id", None) or f"sample_{idx}"
 
         if self.calibrate_visible_actions:
+            window_size = random.randint(
+                self.min_visible_action_window_size,
+                self.max_visible_action_window_size,
+            )
             chunk = calibrate_chunk_visible_actions(
                 chunk,
-                window_size=random.randint(
-                    self.min_visible_action_window_size,
-                    self.max_visible_action_window_size
-                ),
+                window_size=window_size,
                 chunk_id=str(chunk_id),
             )
 
@@ -225,17 +171,11 @@ class HierarchicalPokerChunkDataset(Dataset):
 def hierarchical_collate_batch(
     batch: List[Dict[str, Any]],
     cat_pad_id: int = 0,
-    numeric_dim: int = 18,
+    numeric_dim: int = 22,
 ) -> Dict[str, torch.Tensor]:
     batch_size = len(batch)
-
     max_hands = max(len(item["action_cat"]) for item in batch)
-    max_actions = max(
-        len(hand_actions)
-        for item in batch
-        for hand_actions in item["action_cat"]
-    )
-
+    max_actions = max(len(hand_actions) for item in batch for hand_actions in item["action_cat"])
     max_hands = max(1, max_hands)
     max_actions = max(1, max_actions)
 
@@ -244,17 +184,14 @@ def hierarchical_collate_batch(
         fill_value=cat_pad_id,
         dtype=torch.long,
     )
-
     action_num = torch.zeros(
         size=(batch_size, max_hands, max_actions, numeric_dim),
         dtype=torch.float32,
     )
-
     action_mask = torch.zeros(
         size=(batch_size, max_hands, max_actions),
         dtype=torch.bool,
     )
-
     hand_mask = torch.zeros(
         size=(batch_size, max_hands),
         dtype=torch.bool,
@@ -264,27 +201,21 @@ def hierarchical_collate_batch(
     labels = torch.stack([item["label"] for item in batch])
 
     for batch_idx, item in enumerate(batch):
-        cat_hands = item["action_cat"]
-        num_hands = item["action_num"]
-
-        for hand_idx, (cat_rows, num_rows) in enumerate(zip(cat_hands, num_hands)):
+        for hand_idx, (cat_rows, num_rows) in enumerate(zip(item["action_cat"], item["action_num"])):
             if hand_idx >= max_hands:
                 break
-
             length = min(len(cat_rows), max_actions)
-
             if length <= 0:
                 continue
 
-            action_cat[batch_idx, hand_idx, :length, :] = torch.tensor(
-                cat_rows[:length],
-                dtype=torch.long,
-            )
+            cat_tensor = torch.tensor(cat_rows[:length], dtype=torch.long)
+            action_cat[batch_idx, hand_idx, :length, :] = cat_tensor[:, :3]
 
-            action_num[batch_idx, hand_idx, :length, :] = torch.tensor(
-                num_rows[:length],
-                dtype=torch.float32,
-            )
+            num_tensor = torch.tensor(num_rows[:length], dtype=torch.float32)
+            if num_tensor.ndim == 1:
+                num_tensor = num_tensor.unsqueeze(0)
+            num_dim = min(num_tensor.shape[-1], numeric_dim)
+            action_num[batch_idx, hand_idx, :length, :num_dim] = num_tensor[:, :num_dim]
 
             action_mask[batch_idx, hand_idx, :length] = True
             hand_mask[batch_idx, hand_idx] = True
