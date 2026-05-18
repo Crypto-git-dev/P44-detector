@@ -175,6 +175,7 @@ class Poker44BotDetector:
 
     @torch.no_grad()
     def _predict_neural_batch(self, batch: Dict[str, torch.Tensor]) -> List[float]:
+        print(f"Predicting with neural head on batch of size {batch['features'].shape[0]}")  # Debug statement
         logits = self.model(
             action_cat=batch["action_cat"],
             action_num=batch["action_num"],
@@ -187,6 +188,7 @@ class Poker44BotDetector:
 
     @torch.no_grad()
     def _predict_xgb_batch(self, batch: Dict[str, torch.Tensor]) -> List[float]:
+        print(f"Predicting with XGBoost head on batch of size {batch['features'].shape[0]}")  # Debug statement
         if self.xgb_model is None:
             raise RuntimeError("XGBoost model is not loaded.")
 

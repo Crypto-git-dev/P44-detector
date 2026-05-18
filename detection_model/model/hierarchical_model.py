@@ -131,6 +131,13 @@ class HierarchicalChunkClassifier(nn.Module):
         self.gru_projection = nn.Linear(gru_output_dim, d_model) if gru_output_dim != d_model else nn.Identity()
         self.gru_norm = nn.LayerNorm(d_model)
 
+        self.position_projection = nn.Sequential(
+            nn.Linear(1, d_model),
+            nn.LayerNorm(d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+
         self.hand_attention = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.Tanh(),
@@ -254,6 +261,30 @@ class HierarchicalChunkClassifier(nn.Module):
             action_num=action_num,
             action_mask=action_mask,
         )
+
+        batch_size, max_hands, _ = hand_embeddings.shape
+        device = hand_embeddings.device
+
+        # [H]
+        hand_indices = torch.arange(max_hands, device=device).float()
+
+        # Number of valid hands per sample: [B]
+        valid_hand_counts = hand_mask.sum(dim=1).float().clamp(min=1.0)
+
+        # Normalize by actual valid hand count.
+        # Shape: [B, H]
+        relative_positions = hand_indices.unsqueeze(0) / (
+            valid_hand_counts.unsqueeze(1) - 1.0
+        ).clamp(min=1.0)
+
+        # Mask padded hand positions.
+        relative_positions = relative_positions * hand_mask.float()
+
+        # Shape: [B, H, 1]
+        relative_positions = relative_positions.unsqueeze(-1)
+
+        position_embedding = self.position_projection(relative_positions)
+        hand_embeddings = hand_embeddings + position_embedding
         return self.encode_chunk(hand_embeddings=hand_embeddings, hand_mask=hand_mask)
 
     def forward(
